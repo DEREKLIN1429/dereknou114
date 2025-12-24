@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RM Wh Inventory System (Scanner Integrated)</title>
+    
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src='https://unpkg.com/tesseract.js@v2.1.0/dist/tesseract.min.js'></script>
+
+    <style>
+        /* =========================================
+           CSS Styles
+           ========================================= */
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 800px; margin: 0 auto; padding: 10px; background-color: #222; color: #fff; }
+        
+        h2 { text-align: center; margin-bottom: 10px; font-size: 1.7rem; color: #eee; font-weight: bold; letter-spacing: 1px; }
+
+        /* User Bar */
+        .user-bar {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px;
+            background: #2c3e50; padding: 10px 15px; border-radius: 8px; border: 2px solid #007bff; width: 100%;
+            box-shadow: 0 0 10px rgba(0, 123, 255, 0.2);
+        }
+        .user-bar label { font-weight: bold; color: #5dade2; white-space: nowrap; font-size: 1rem; }
+        .input-field {
+            flex: 1; min-width: 100px; padding: 8px; border: 1px solid #555; border-radius: 4px;
+            background: #fff; color: #000; font-size: 1.1rem; letter-spacing: 1px; font-weight: bold;
+        }
+        
+        /* Mode Switches */
+        .mode-switch, .qty-mode-switch { display: flex; gap: 8px; margin-bottom: 10px; }
+        .mode-btn { 
+            flex: 1; padding: 8px; border: none; border-radius: 20px; 
+            background: #333; color: #aaa; font-weight: bold; cursor: pointer; transition: 0.3s; 
+            display: flex; flex-direction: column; align-items: center; line-height: 1.2; font-size: 0.9rem;
+        }
+        .mode-btn small { font-size: 0.7rem; font-weight: normal; opacity: 0.8; }
+        .mode-btn.active { background: #007bff; color: white; box-shadow: 0 0 10px rgba(0,123,255,0.5); }
+
+        /* Viewport Area */
+        .viewport { 
+            position: relative; 
+            width: 100%; 
+            height: 50vh; 
+            background: black; 
+            border-radius: 10px; 
+            overflow: hidden; 
+            margin-bottom: 10px;
+            border: 1px solid #444;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            z-index: 1;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        }
+        
+        /* Barcode Specific Elements */
+        #reader { width: 100%; height: 100%; object-fit: cover; display: none; }
+        #scan-overlay {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 250px; height: 250px;
+            border: 4px solid #00ff00;
+            box-shadow: 0 0 0 1000px rgba(0,0,0,0.5);
+            z-index: 10;
+            border-radius: 20px;
+            pointer-events: none;
+            display: none; 
+        }
+        .camera-hint {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            display: flex; justify-content: center; align-items: center;
+            color: white; font-size: 1.2rem; font-weight: bold;
+            text-align: center; z-index: 20; pointer-events: none;
+            white-space: pre-line;
+            text-shadow: 1px 1px 4px black;
+            display: none; /* Hidden by default */
+        }
+
+        /* OCR Specific Elements */
+        #ocr-video { width: 100%; height: 100%; object-fit: cover; display: none; }
+        .scan-guide-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; display: none; z-index: 10;
+        }
+        .guide-box {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 96%; height: 50px;
+            border: 2px solid #ff4d4d; 
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.7);
+            border-radius: 4px; transition: 0.3s all;
+        }
+        .guide-box.ready { border-color: #00ff00; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.8); }
+        .guide-box.paused { border-color: #007bff; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6); }
+        .guide-line {
+            position: absolute; top: 50%; left: 50%; width: 280px; max-width: 90%; height: 30px; 
+            background-color: rgba(255, 77, 77, 0.3); transform: translate(-50%, -50%);
+            pointer-events: none; transition: 0.3s all; box-shadow: 0 0 2px rgba(255,0,0,0.5);
+        }
+        .guide-box.ready .guide-line { background-color: rgba(0, 255, 0, 0.3); }
+        .guide-text {
+            position: absolute; top: -45px; left: 0; width: 100%;
+            text-align: center; color: #ff4d4d; font-size: 0.9rem; font-weight: bold;
+            text-shadow: 1px 1px 2px black; transition: 0.3s all;
+            background: rgba(0,0,0,0.6); padding: 4px 0; border-radius: 4px;
+        }
+        .guide-box.ready .guide-text { color: #00ff00; content: "✅ Ready"; }
+
+        /* Controls Area */
+        .controls { display: flex; gap: 8px; padding: 5px 0; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap;}
+        
+        button.action-btn { 
+            padding: 8px 5px; border: none; border-radius: 8px; cursor: pointer; 
+            font-weight: bold; font-size: 0.9rem; color: white; transition: 0.2s;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            line-height: 1.2; position: relative; z-index: 100; flex: 1; min-width: 60px;
+        }
+        button.action-btn small { font-size: 0.7rem; font-weight: normal; opacity: 0.9; margin-top: 2px; }
+
+        .btn-clear { background-color: #6c757d; } 
+        .btn-flash { background-color: #ffc107; color: #333 !important; display: none; }
+        .btn-export { background-color: #28a745; }
+        .btn-settings { background-color: #17a2b8; }
+        .btn-upload { background-color: #007bff; }
+        .btn-sheet { background-color: #6610f2; } 
+
+        #loading-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); display: none;
+            justify-content: center; align-items: center; flex-direction: column; z-index: 300;
+        }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #dc3545; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 15px;}
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Table Styles */
+        .table-container { margin-top: 0; overflow-x: auto; background: #fff; border-radius: 8px; color: #333; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        table { width: 100%; border-collapse: collapse; min-width: 100%; }
+        
+        th, td { padding: 10px 6px; text-align: left; border-bottom: 1px solid #eee; font-size: 0.85rem; vertical-align: middle; }
+        th { background-color: #333; color: white; white-space: nowrap; font-weight: bold; }
+        
+        .code-col { width: 30%; word-break: break-all; } 
+        .loc-col { width: 15%; text-align: center; }      
+        .name-col { width: 20%; }                          
+        
+        th.qty-col, td.qty-col { 
+            width: 10%; text-align: center; font-weight: bold; 
+            background-color: #000 !important; color: #fff !important; 
+        } 
+        
+        .action-col { width: 25%; text-align: center; white-space: nowrap; }
+
+        tr:nth-child(even) { background-color: #f8f9fa; }
+        
+        .tbl-btn { padding: 4px 8px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; margin: 0 2px; }
+        .tbl-btn.edit { background-color: #ffc107; color: #000; }
+        .tbl-btn.del { background-color: #dc3545; color: #fff; }
+        
+        .editable-code { color: #007bff; cursor: pointer; text-decoration: underline; font-weight: bold; }
+        
+        /* Modal Styles */
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 200; justify-content: center; align-items: center; }
+        .modal-content { background: #333; padding: 20px; border-radius: 8px; width: 90%; max-width: 400px; border: 1px solid #555; max-height: 80vh; overflow-y: auto; }
+        .modal h3 { text-align: center; color: #17a2b8; margin-bottom: 15px; }
+        .setting-group { margin-bottom: 15px; }
+        .setting-group label { display: block; margin-bottom: 5px; color: #ccc; font-size: 0.9rem; }
+        .setting-group input, .setting-group select { width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #555; background: #222; color: white; }
+        .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+
+        .input-readonly {
+            background-color: #444 !important; color: #aaa !important;
+            border: none !important; cursor: not-allowed; font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loading-overlay">
+        <div class="spinner"></div>
+        <div style="color:white; font-weight:bold;" id="loading-text">分析中...</div>
+    </div>
+
+    <h2>RM_Wh Inventory</h2>
+
+    <div class="user-bar">
+        <label>👤 User ID:</label>
+        <input type="text" id="userInput" class="input-field" placeholder="Enter User ID" onchange="changeUser(this.value)">
+    </div>
+
+    <div class="mode-switch">
+        <button class="mode-btn active" onclick="switchMode('barcode')">
+            條碼/QR<small>Barcode & QR</small>
+        </button>
+        <button class="mode-btn" onclick="switchMode('ocr')">
+            文字識別<small>OCR Text</small>
+        </button>
+    </div>
+    
+    <div class="qty-mode-switch">
+         <button id="qty-mode-auto" class="mode-btn" onclick="setQtyMode('auto')">
+            自動抓取數量<small>Auto Qty</small>
+         </button>
+         <button id="qty-mode-manual" class="mode-btn" onclick="setQtyMode('manual')">
+            手動輸入數量<small>Manual Qty</small>
+         </button>
+    </div>
+
+    <div class="viewport" onclick="handleViewportClick()">
+        <div id="reader"></div>
+        <div id="scan-overlay"></div>
+        <div id="cam-hint-text" class="camera-hint">👆 點擊畫面開始掃描</div>
+
+        <video id="ocr-video" autoplay playsinline></video>
+        <div id="ocr-overlay" class="scan-guide-overlay">
+            <div class="guide-box" id="guideBox">
+                <div class="guide-line"></div>
+                <div class="guide-text" id="guideText">請對準文字</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <button class="btn-clear action-btn" onclick="clearData()">
+            🗑️ Clear<small>Reset</small>
+        </button>
+        
+        <button id="btn-flash" class="btn-flash action-btn" onclick="toggleTorch()">
+            🔦 Light<small>On/Off</small>
+        </button>
+        
+        <button class="btn-settings action-btn" onclick="openSettings()">
+            ⚙️ Settings<small>Config</small>
+        </button>
+
+        <button class="btn-export action-btn" onclick="exportToExcel()">
+            📤 Export<small>CSV</small>
+        </button>
+
+        <button class="btn-upload action-btn" onclick="uploadToCloud()">
+            ☁️ Upload<small>Cloud</small>
+        </button>
+
+        <button class="btn-sheet action-btn" onclick="openCloudSheet()">
+            📂 Sheet<small>View</small>
+        </button>
+    </div>
+
+    <div class="table-container">
+        <table id="inventoryTable">
+            <thead>
+                <tr>
+                    <th class="code-col">Code</th>
+                    <th class="loc-col">Loc</th>
+                    <th class="name-col">Name</th>
+                    <th class="qty-col">Qty</th>
+                    <th class="action-col">Action</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <h3>⚙️ System Settings</h3>
+            <div class="setting-group">
+                <label>Decimal Places (0-4):</label>
+                <select id="set_decimals"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select>
+            </div>
+            <div class="setting-group"><label>Min Length:</label><input type="number" id="set_minLen" value="4"></div>
+            <div class="setting-group"><label>Max Length:</label><input type="number" id="set_maxLen" value="50"></div>
+            <div class="setting-group">
+                <label>Filename Format:</label>
+                <input type="text" id="set_filename" value="USER_YYYYMMDDHHmmss">
+                <div style="font-size:0.7rem; color:#aaa; margin-top:3px;">Vars: USER, YYYY, MM, DD, HH, mm, ss</div>
+            </div>
+            
+            <div class="setting-group">
+                <label style="color:#007bff">☁️ Google Script URL (ReadOnly):</label>
+                <input type="text" id="display_cloudUrl" class="input-readonly" readonly disabled>
+            </div>
+            
+            <div class="setting-group">
+                <label style="color:#6610f2">📊 Google Sheet URL (ReadOnly):</label>
+                <input type="text" id="display_sheetUrl" class="input-readonly" readonly disabled>
+            </div>
+
+            <div class="modal-actions">
+                <button class="action-btn" style="background:#6c757d" onclick="closeSettings()">Cancel</button>
+                <button class="action-btn" style="background:#28a745" onclick="saveSettings()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 🔧 System Configuration
+        // ==========================================
+        const SYSTEM_CONFIG = {
+            API_URL: "https://script.google.com/macros/s/AKfycbx4zEWO7x_mWLi7gXgV_rW_jj_NeU4W71bdH38ItanTEAuSlzljQ6cUH6_A9wfR_SyC/exec",
+            SHEET_URL: "https://docs.google.com/spreadsheets/d/1cXxK-G5BhFszXUpCp4a4KcHBonsI1zaHewZOgx7V3Zs/edit?gid=0#gid=0"
+        };
+        
+        let savedUser = localStorage.getItem('currentUser') || "Default"; 
+        document.getElementById('userInput').value = savedUser;
+        let inventory = {}; 
+        let lastLocation = localStorage.getItem('lastLocation') || "";
+
+        let appSettings = JSON.parse(localStorage.getItem('appSettings')) || {};
+        if (appSettings.decimals === undefined) appSettings.decimals = 2;
+        if (appSettings.minLen === undefined) appSettings.minLen = 4;
+        if (appSettings.maxLen === undefined) appSettings.maxLen = 50;
+        if (!appSettings.filenameFormat) appSettings.filenameFormat = "USER_YYYYMMDDHHmmss";
+        localStorage.setItem('appSettings', JSON.stringify(appSettings));
+        
+        let qtyInputMode = localStorage.getItem('qtyInputMode') || 'auto'; 
+
+        // Scanner Variables
+        let currentMode = 'barcode'; 
+        let videoTrack = null; 
+        let isTorchOn = false;
+        
+        // Barcode Specific
+        let html5QrCode = null;
+        let isBarcodeScanning = false;
+        let currentDetectedCode = null;
+
+        // OCR Specific
+        let ocrStream = null;
+        let ocrAnalysisInterval = null;
+        let isOcrScanning = false;
+
+        loadInventoryForUser(savedUser);
+        initializeQtyModeUI(); 
+
+        // ==========================================
+        // 🔄 Mode Switching Logic
+        // ==========================================
+        function switchMode(mode) {
+            currentMode = mode;
+            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+            // Select only the mode switches, not quantity switches
+            document.querySelector(`.mode-switch .mode-btn[onclick="switchMode('${mode}')"]`).classList.add('active');
+
+            // 1. Cleanup: Stop Barcode Scanner
+            stopBarcodeScanner(); 
+            document.getElementById('reader').style.display = 'none';
+            document.getElementById('scan-overlay').style.display = 'none';
+            document.getElementById('cam-hint-text').style.display = 'none';
+
+            // 2. Cleanup: Stop OCR Scanner
+            stopOcrCamera();
+            document.getElementById('ocr-video').style.display = 'none';
+            document.getElementById('ocr-overlay').style.display = 'none';
+            document.getElementById('btn-flash').style.display = 'none'; // Hide flash for Barcode mode initially
+
+            // 3. Setup New Mode UI
+            if (mode === 'barcode') {
+                document.getElementById('reader').style.display = 'block';
+                document.getElementById('cam-hint-text').style.display = 'flex';
+                document.getElementById('cam-hint-text').innerText = "👆 點擊畫面開始掃描";
+                document.getElementById('cam-hint-text').style.color = "white";
+                // Barcode mode starts on click
+            } else {
+                document.getElementById('ocr-video').style.display = 'block';
+                document.getElementById('ocr-overlay').style.display = 'block';
+                startOcrCamera(); // OCR mode auto-starts
+            }
+        }
+
+        // Unified click handler
+        function handleViewportClick() {
+            if (currentMode === 'barcode') {
+                if (!isBarcodeScanning) {
+                    startBarcodeScan();
+                } else {
+                    captureBarcodeScan();
+                }
+            } else if (currentMode === 'ocr') {
+                if (isOcrScanning) { captureAndProcess(); } 
+                else { resumeOcrScanning(); }
+            }
+        }
+
+        // ==========================================
+        // 📷 Barcode / QR Logic (Standalone Flow)
+        // ==========================================
+        function startBarcodeScan() {
+            const overlay = document.getElementById('scan-overlay');
+            const hint = document.getElementById('cam-hint-text');
+            
+            currentDetectedCode = null;
+
+            if (!html5QrCode) {
+                html5QrCode = new Html5Qrcode("reader");
+            }
+
+            const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+
+            html5QrCode.start({ facingMode: "environment" }, config, 
+                (decodedText) => {
+                    currentDetectedCode = decodedText;
+                    hint.innerText = `🔍 Detected:\n${decodedText}\n(Tap screen to confirm)`;
+                    hint.style.color = "#ffff00"; 
+                },
+                (errorMessage) => {}
+            ).then(() => {
+                isBarcodeScanning = true;
+                overlay.style.display = "block";
+                hint.style.display = "flex";
+                hint.innerText = "👀 Scanning... Point at code";
+                hint.style.color = "white";
+            }).catch(err => {
+                alert("Camera Error: " + err);
+                isBarcodeScanning = false;
+            });
+        }
+
+        function captureBarcodeScan() {
+            if (!currentDetectedCode) return;
+
+            if (confirm(`Scanned Data:\n${currentDetectedCode}\n\nAdd to inventory?`)) {
+                stopBarcodeScanner();
+                saveDataPrompt(currentDetectedCode);
+            } else {
+                currentDetectedCode = null;
+                document.getElementById('cam-hint-text').innerText = "👀 Scanning... Point at code";
+                document.getElementById('cam-hint-text').style.color = "white";
+            }
+        }
+
+        function stopBarcodeScanner() {
+            if (!html5QrCode || !isBarcodeScanning) return Promise.resolve();
+
+            return html5QrCode.stop().then(() => {
+                isBarcodeScanning = false;
+                document.getElementById('scan-overlay').style.display = 'none';
+                
+                const hint = document.getElementById('cam-hint-text');
+                hint.innerText = "👆 點擊畫面開始掃描";
+                hint.style.color = "white";
+                
+                currentDetectedCode = null;
+                html5QrCode.clear();
+            }).catch(err => console.log("Stop failed", err));
+        }
+
+        // ==========================================
+        // 🔡 OCR Logic (Preserved Original)
+        // ==========================================
+        async function startOcrCamera() {
+            try {
+                const constraints = { video: { facingMode: "environment", width: { ideal: 3840 }, height: { ideal: 2160 }, focusMode: "continuous" } };
+                ocrStream = await navigator.mediaDevices.getUserMedia(constraints);
+                const video = document.getElementById('ocr-video');
+                video.srcObject = ocrStream;
+                videoTrack = ocrStream.getVideoTracks()[0];
+                
+                // OCR mode supports flash toggle
+                if (videoTrack) {
+                    const capabilities = videoTrack.getCapabilities();
+                    if (capabilities.torch) document.getElementById('btn-flash').style.display = 'flex';
+                }
+
+                isOcrScanning = true;
+                startImageAnalysis(video);
+            } catch (err) { 
+                alert("OCR Camera Error: " + err); 
+            }
+        }
+
+        function stopOcrCamera() {
+            if (ocrStream) { ocrStream.getTracks().forEach(track => track.stop()); ocrStream = null; }
+            if (ocrAnalysisInterval) { clearInterval(ocrAnalysisInterval); ocrAnalysisInterval = null; }
+            videoTrack = null;
+            isTorchOn = false;
+            document.getElementById('btn-flash').classList.remove('active');
+            isOcrScanning = false;
+        }
+
+        function startImageAnalysis(video) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (ocrAnalysisInterval) clearInterval(ocrAnalysisInterval);
+            ocrAnalysisInterval = setInterval(() => {
+                if (video.readyState === 4 && isOcrScanning) { 
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    const cropHeight = canvas.height * 0.045; 
+                    const cropY = (canvas.height - cropHeight) / 2;
+                    ctx.drawImage(video, 0, 0);
+                    const imgData = ctx.getImageData(0, cropY, canvas.width, cropHeight);
+                    const score = calculateContrast(imgData.data);
+                    updateOcrGuideUI(score > 30); 
+                }
+            }, 200);
+        }
+
+        function calculateContrast(data) {
+            let sum = 0, count = 0;
+            for (let i = 0; i < data.length; i += 80) {
+                sum += (data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114); count++;
+            }
+            const mean = sum / count;
+            let variance = 0;
+            for (let i = 0; i < data.length; i += 80) {
+                const gray = (data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114);
+                variance += Math.pow(gray - mean, 2);
+            }
+            return Math.sqrt(variance / count);
+        }
+
+        function updateOcrGuideUI(isGoodQuality) {
+            const box = document.getElementById('guideBox');
+            const text = document.getElementById('guideText');
+            if (!isOcrScanning) return; 
+            if (isGoodQuality) { box.classList.add('ready'); text.innerText = "✅ Ready / Tap to Capture"; } 
+            else { box.classList.remove('ready'); text.innerText = "請以中心線覆蓋文字"; }
+        }
+
+        function captureAndProcess() {
+            const video = document.getElementById('ocr-video');
+            video.pause();
+            isOcrScanning = false;
+            
+            const box = document.getElementById('guideBox');
+            box.classList.add('paused');
+            document.getElementById('guideText').innerText = "Processing...";
+
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0);
+
+            const cropHeight = canvas.height * 0.045; 
+            const cropY = (canvas.height - cropHeight) / 2;
+
+            const cropCanvas = document.createElement('canvas');
+            cropCanvas.width = canvas.width;
+            cropCanvas.height = cropHeight;
+            const cropCtx = cropCanvas.getContext('2d');
+            cropCtx.drawImage(canvas, 0, cropY, canvas.width, cropHeight, 0, 0, cropCanvas.width, cropCanvas.height);
+
+            document.getElementById('loading-overlay').style.display = 'flex';
+            document.getElementById('loading-text').innerText = "分析中... Analyzing...";
+            
+            Tesseract.recognize(
+                cropCanvas.toDataURL('image/jpeg'),
+                'eng',
+                { tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-', tessedit_pageseg_mode: '7' }
+            ).then(({ data: { text } }) => {
+                document.getElementById('loading-overlay').style.display = 'none';
+                processOcrResult(text);
+            }).catch(err => {
+                document.getElementById('loading-overlay').style.display = 'none';
+                alert("OCR Error: " + err);
+                resumeOcrScanning();
+            });
+        }
+
+        function processOcrResult(text) {
+             let cleanText = text.replace(/[^a-zA-Z0-9.-]/g, "");
+             const strongPattern = /[A-Z0-9]+(-[A-Z0-9.]+){3,}/;
+             const match = cleanText.match(strongPattern);
+             if (match) { cleanText = match[0]; } 
+             cleanText = cleanText.replace(/^[-.]+|[-.]+$/g, "");
+
+            if (!cleanText) { alert("⚠️ No text detected"); resumeOcrScanning(); return; }
+
+            saveDataPrompt(cleanText);
+        }
+
+        function resumeOcrScanning() {
+            isOcrScanning = true;
+            document.getElementById('ocr-video').play();
+            startImageAnalysis(document.getElementById('ocr-video')); // Restart analysis loop
+            const box = document.getElementById('guideBox');
+            const text = document.getElementById('guideText');
+            box.classList.remove('paused');
+            text.innerText = "請以中心線覆蓋文字";
+        }
+
+        function toggleTorch() {
+            if (!videoTrack) { alert("Camera not active"); return; }
+            isTorchOn = !isTorchOn;
+            videoTrack.applyConstraints({ advanced: [{ torch: isTorchOn }] })
+            .then(() => {
+                const btn = document.getElementById('btn-flash');
+                if(isTorchOn) { btn.style.backgroundColor = "#fff"; btn.style.color = "#000"; } 
+                else { btn.style.backgroundColor = "#ffc107"; btn.style.color = "#333"; }
+            })
+            .catch(e => { isTorchOn = !isTorchOn; alert("Flash not supported"); });
+        }
+
+        // ==========================================
+        // 📊 Inventory Logic
+        // ==========================================
+
+        function changeUser(val) {
+            val = val.trim();
+            if (!val) val = "Default";
+            savedUser = val;
+            localStorage.setItem('currentUser', savedUser);
+            loadInventoryForUser(savedUser);
+            alert(`👋 Switched to: ${savedUser}`);
+        }
+
+        function loadInventoryForUser(userId) {
+            let key = `inventory_${userId}`; 
+            inventory = JSON.parse(localStorage.getItem(key)) || {};
+            renderTable();
+        }
+
+        function saveCurrentInventory() {
+            let key = `inventory_${savedUser}`;
+            localStorage.setItem(key, JSON.stringify(inventory));
+        }
+
+        function setQtyMode(mode) {
+            qtyInputMode = mode;
+            localStorage.setItem('qtyInputMode', mode);
+            initializeQtyModeUI();
+            console.log(`Qty Mode: ${mode}`);
+        }
+        
+        function initializeQtyModeUI() {
+            const mode = qtyInputMode;
+            const autoBtn = document.getElementById('qty-mode-auto');
+            const manualBtn = document.getElementById('qty-mode-manual');
+            
+            if (autoBtn && manualBtn) {
+                autoBtn.classList.remove('active');
+                manualBtn.classList.remove('active');
+                if (mode === 'auto') {
+                    autoBtn.classList.add('active');
+                } else {
+                    manualBtn.classList.add('active');
+                }
+            }
+        }
+
+        function openCloudSheet() {
+            window.open(SYSTEM_CONFIG.SHEET_URL, '_blank');
+        }
+
+        function renderTable() {
+            const tbody = document.querySelector("#inventoryTable tbody");
+            tbody.innerHTML = "";
+            Object.keys(inventory).reverse().forEach(k => {
+                let item = inventory[k];
+                let qtyDisplay = parseFloat(item.qty).toFixed(appSettings.decimals);
+                
+                tbody.innerHTML += `
+                    <tr>
+                        <td class="code-col">
+                            <span class="editable-code" onclick="saveDataPrompt('${k}')">${k}</span>
+                            <span style="font-size:0.7em; color:#999;">(${k.length})</span>
+                        </td>
+                        <td class="loc-col" style="color:#ffc107;">${item.location || '-'}</td>
+                        <td class="name-col">${item.name}</td>
+                        <td class="qty-col">${qtyDisplay}</td>
+                        <td class="action-col">
+                            <button class="tbl-btn edit" onclick="saveDataPrompt('${k}')">✏️</button>
+                            <button class="tbl-btn del" onclick="deleteItem('${k}')">🗑️</button>
+                        </td>
+                    </tr>`;
+            });
+        }
+
+        function deleteItem(code) {
+            if(confirm(`Delete ${code}?`)) {
+                delete inventory[code];
+                saveCurrentInventory();
+                renderTable();
+            }
+        }
+
+        function saveDataPrompt(initialText) {
+            // Pause OCR scanning if active so prompt doesn't interfere
+            if(currentMode === 'ocr' && isOcrScanning) {
+                document.getElementById('ocr-video').pause();
+                isOcrScanning = false;
+            }
+
+            setTimeout(() => {
+                let code = prompt("1️⃣ Confirm Code:", initialText);
+                if (code === null) return resumeFromSave();
+                code = code.replace(/[^a-zA-Z0-9.-]/g, "").trim();
+                if (!code) return resumeFromSave();
+
+                if (code.length < appSettings.minLen) {
+                    alert(`❌ Too short (<${appSettings.minLen})`);
+                    return resumeFromSave();
+                }
+
+                let item = inventory[code];
+                
+                // Auto-parse logic
+                let lastPartStr = "";
+                if (code.includes("-")) {
+                    let parts = code.split('-');
+                    lastPartStr = parts[parts.length - 1]; 
+                }
+
+                let defaultName = item ? item.name : (code.split('-')[0] || "");
+                
+                let defaultQty;
+                if (item) {
+                    defaultQty = item.qty.toString();
+                } else {
+                    if (qtyInputMode === 'auto') {
+                        defaultQty = lastPartStr; 
+                    } else { 
+                        defaultQty = "";           
+                    }
+                }
+                
+                let defaultLoc = item ? item.location : lastLocation;
+
+                let name = prompt(`2️⃣ Name:`, defaultName);
+                if (name === null) return resumeFromSave();
+
+                let qtyStr = prompt(`3️⃣ Qty:`, defaultQty);
+                if (qtyStr === null) return resumeFromSave();
+                
+                let qty = parseFloat(qtyStr);
+                if (isNaN(qty)) qty = 0.00; 
+
+                let location = prompt(`4️⃣ Location:`, defaultLoc);
+                if (location === null) return resumeFromSave();
+                location = location.trim();
+                
+                if (location) {
+                    lastLocation = location;
+                    localStorage.setItem('lastLocation', lastLocation);
+                }
+
+                const d = new Date();
+                const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+                const nd = new Date(utc + (3600000 * 5.5)); 
+                const year = nd.getFullYear();
+                const month = String(nd.getMonth() + 1).padStart(2, '0');
+                const day = String(nd.getDate()).padStart(2, '0');
+                const hour = String(nd.getHours()).padStart(2, '0');
+                const minute = String(nd.getMinutes()).padStart(2, '0');
+                const second = String(nd.getSeconds()).padStart(2, '0');
+                const istTime = `${year}/${month}/${day} ${hour}:${minute}:${second}`;
+
+                inventory[code] = {
+                    name: name || "No Name",
+                    qty: qty,
+                    location: location,
+                    scanTime: istTime
+                };
+
+                saveCurrentInventory();
+                renderTable();
+                
+                // If we were in OCR mode, resume it
+                resumeFromSave();
+
+            }, 100);
+        }
+
+        function resumeFromSave() {
+            if(currentMode === 'ocr') resumeOcrScanning();
+        }
+
+        function uploadToCloud() {
+            if (Object.keys(inventory).length === 0) return alert("❌ No Data");
+            if (!savedUser || savedUser === "Default") return alert("⚠️ Enter User ID");
+            
+            if(!confirm("Upload to cloud?")) return;
+
+            lastLocation = "";
+            localStorage.removeItem('lastLocation'); 
+
+            document.getElementById('loading-overlay').style.display = 'flex';
+            document.getElementById('loading-text').innerText = "Uploading...";
+
+            const payload = {
+                user: savedUser,
+                items: inventory
+            };
+
+            fetch(SYSTEM_CONFIG.API_URL, {
+                method: 'POST',
+                headers: { "Content-Type": "text/plain;charset=utf-8" },
+                body: JSON.stringify(payload)
+            })
+            .then(response => response.text())
+            .then(data => {
+                document.getElementById('loading-overlay').style.display = 'none';
+                alert("✅ " + data);
+            })
+            .catch(error => {
+                document.getElementById('loading-overlay').style.display = 'none';
+                alert("❌ Upload Failed: " + error);
+            });
+        }
+
+        function exportToExcel() {
+            if (Object.keys(inventory).length === 0) { return alert("❌ No Data"); }
+            if (!savedUser || savedUser === "Default") { return alert("⚠️ Enter User ID"); }
+
+            try {
+                let csv = "\uFEFFCode,Spec,Location,Name,Qty,Time\n";
+                for (let k in inventory) {
+                      let safeName = (inventory[k].name || "").replace(/,/g, " ").replace(/"/g, "");
+                      let loc = (inventory[k].location || "").replace(/,/g, " ");
+                      let parts = k.split('-');
+                      let middleTxt = parts.length >= 3 ? parts[1] : "";
+                      let qtyFormatted = inventory[k].qty.toFixed(appSettings.decimals);
+                      let timeStr = inventory[k].scanTime || ""; 
+
+                      csv += '="' + k + '","' + middleTxt + '","' + loc + '","' + safeName + '",' + qtyFormatted + ',"' + timeStr + '"\n';
+                }
+                let blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                let url = URL.createObjectURL(blob);
+                let link = document.createElement("a");
+                link.href = url;
+                
+                const d = new Date();
+                const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+                const now = new Date(utc + (3600000 * 5.5)); 
+
+                const YYYY = now.getFullYear();
+                const MM = String(now.getMonth() + 1).padStart(2, '0');
+                const DD = String(now.getDate()).padStart(2, '0');
+                const HH = String(now.getHours()).padStart(2, '0');
+                const mm = String(now.getMinutes()).padStart(2, '0');
+                const ss = String(now.getSeconds()).padStart(2, '0');
+                
+                let filename = appSettings.filenameFormat;
+                filename = filename.replace("USER", savedUser).replace("YYYY", YYYY).replace("MM", MM).replace("DD", DD).replace("HH", HH).replace("mm", mm).replace("ss", ss).replace("SS", ss);
+                if (!filename.endsWith(".csv")) filename += ".csv";
+
+                if(!confirm(`Export file:\n📄 ${filename}\n\nContinue?`)) return;
+
+                link.download = filename;
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                setTimeout(function() {
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                    alert("✅ Export Done: " + filename);
+                }, 100);
+            } catch (err) { alert("Export Error: " + err); }
+        }
+
+        function clearData() {
+            if(confirm("Clear all inventory data?")) { 
+                inventory={}; 
+                saveCurrentInventory();
+                renderTable(); 
+            }
+        }
+
+        function openSettings() {
+            appSettings = JSON.parse(localStorage.getItem('appSettings')) || {};
+            document.getElementById('set_decimals').value = appSettings.decimals;
+            document.getElementById('set_minLen').value = appSettings.minLen;
+            document.getElementById('set_maxLen').value = appSettings.maxLen;
+            document.getElementById('set_filename').value = appSettings.filenameFormat;
+            
+            document.getElementById('display_cloudUrl').value = SYSTEM_CONFIG.API_URL;
+            document.getElementById('display_sheetUrl').value = SYSTEM_CONFIG.SHEET_URL;
+            
+            document.getElementById('settingsModal').style.display = 'flex';
+        }
+
+        function closeSettings() { document.getElementById('settingsModal').style.display = 'none'; }
+
+        function saveSettings() {
+            appSettings.decimals = parseInt(document.getElementById('set_decimals').value);
+            appSettings.minLen = parseInt(document.getElementById('set_minLen').value);
+            appSettings.maxLen = parseInt(document.getElementById('set_maxLen').value);
+            appSettings.filenameFormat = document.getElementById('set_filename').value.trim();
+            localStorage.setItem('appSettings', JSON.stringify(appSettings));
+            
+            closeSettings();
+            renderTable();
+            alert("✅ Settings Saved");
+        }
+
+        // Initialize to Barcode mode
+        switchMode('barcode');
+    </script>
+</body>
+</html>
