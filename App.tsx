@@ -28,35 +28,36 @@ const UNIFIED_ANIM_SPEED = 1200;
 
 /**
  * Gets the current date/time specifically in India Standard Time
+ * Returns a Date object where the local components (hours, minutes) match IST.
  */
 function getISTNow(): Date {
   const now = new Date();
-  // Using Intl to get the string representation in IST, then parsing back to a Date object
-  // for easy property access (getHours, getDate, etc.)
   const indiaTimeStr = now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
   return new Date(indiaTimeStr);
 }
 
 /**
- * Converts a standard Date to a formatted YYYY-MM-DD string based on India Time
+ * Formats a Date object to YYYY-MM-DD using its local components.
+ * This avoids timezone conversions shifting the day.
  */
 function formatDateToISO(d: Date): string {
-  // We use the India-relative parts
-  const indiaStr = d.toLocaleString("en-US", { timeZone: "Asia/Kolkata", year: 'numeric', month: '2-digit', day: '2-digit' });
-  const [mm, dd, yyyy] = indiaStr.split(',')[0].split('/');
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
 
 /**
- * Logic: If current time in IST is before 07:00, the "Shift Date" is yesterday.
+ * Logic: If the time (in Factory Time/IST) is before 07:00, the "Shift Date" is yesterday.
  */
 function getShiftDateString(date: Date): string {
-  // Create a copy that we can manipulate
-  const istDate = new Date(date.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-  if (istDate.getHours() < 7) {
-    istDate.setDate(istDate.getDate() - 1);
+  const h = date.getHours();
+  // Create a copy to manipulate
+  const d = new Date(date);
+  if (h < 7) {
+    d.setDate(d.getDate() - 1);
   }
-  return formatDateToISO(istDate);
+  return formatDateToISO(d);
 }
 
 function robustParseCSV(text: string): string[][] {
@@ -91,26 +92,47 @@ function findColIdx(headers: string[], keywords: string[]): number {
 }
 
 /**
- * Parses date strings from CSV assuming they are in IST context
+ * Parses date strings from CSV. 
+ * Supports DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD.
+ * Returns a Date object representing the "Factory Wall Time".
  */
 function smartParseDate(str: string) {
   if (!str) return null;
   const cleanStr = str.trim().replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\u00a0/g, ' ');
   
-  // Try DD/MM/YYYY HH:mm format
-  const dmyMatch = cleanStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  // Extract time part if exists
+  const parts = cleanStr.split(/\s+/);
+  const datePart = parts[0];
+  const timePart = parts.length > 1 ? parts[1] : "00:00";
+  const [hh, mm] = timePart.split(':').map(Number);
+
+  // Try YYYY-MM-DD or YYYY/MM/DD
+  const isoMatch = datePart.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (isoMatch) {
+    const d = new Date(parseInt(isoMatch[1]), parseInt(isoMatch[2]) - 1, parseInt(isoMatch[3]), hh || 0, mm || 0);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  // Try DD/MM/YYYY or DD-MM-YYYY
+  const dmyMatch = datePart.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
   if (dmyMatch) {
-    const parts = cleanStr.split(/\s+/);
-    const timePart = parts.length > 1 ? parts[1] : "00:00";
-    const [hh, mm] = timePart.split(':').map(Number);
-    // Create local date parts, assuming input is IST
-    // Note: We create it as a "local" date for simpler manipulation, 
-    // but logic elsewhere treats these relative to the 07:00-07:00 shift.
+    // dmyMatch[1] = Day, dmyMatch[2] = Month, dmyMatch[3] = Year
     const d = new Date(parseInt(dmyMatch[3]), parseInt(dmyMatch[2]) - 1, parseInt(dmyMatch[1]), hh || 0, mm || 0);
     return isNaN(d.getTime()) ? null : d;
   }
+
+  // Fallback
   const d = new Date(cleanStr);
   return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Safe number parsing that handles commas (e.g. "1,894")
+ */
+function parseNumberSafe(str: string): number {
+  if (!str) return 0;
+  // Remove commas before parsing
+  return parseFloat(str.replace(/,/g, '')) || 0;
 }
 
 // --- Sub-components ---
@@ -168,12 +190,17 @@ const DashboardTimer = ({ rate, isPaused, onTrigger, onTogglePause }: { rate: nu
 
 const DynamicChart = React.memo(({ type, data, keys, colors, axisKeys, yDomain, benchmark, settings, dataVersion = 0 }: any) => {
   const [showLabels, setShowLabels] = useState(false);
+  
   useEffect(() => {
     setShowLabels(false);
     const delay = settings.animationEnabled ? UNIFIED_ANIM_SPEED + 150 : 50;
     const timer = setTimeout(() => setShowLabels(true), delay);
     return () => clearTimeout(timer);
   }, [dataVersion, type, settings.animationEnabled]);
+
+  if (!data || !Array.isArray(data) || data.length === 0) {
+    return <div className="w-full h-full flex items-center justify-center text-slate-300 font-bold italic">No data available for the selected range</div>;
+  }
 
   const animationProps = { 
     isAnimationActive: settings.animationEnabled, 
@@ -192,9 +219,14 @@ const DynamicChart = React.memo(({ type, data, keys, colors, axisKeys, yDomain, 
         </RadarChart>
       );
     }
+    
     const ChartComp: any = type === 'composed' ? ComposedChart : (type === 'bar' ? BarChart : (type === 'area' ? AreaChart : LineChart));
+    
+    // Explicitly use 0 (number) for default axis, ensuring connection between Axis and Series.
+    const primaryYAxisId = type === 'composed' ? "left" : 0;
+
     return (
-      <ChartComp data={data} margin={{ top: 30, right: 30, left: 50, bottom: 40 }}>
+      <ChartComp data={data} margin={{ top: 30, right: 30, left: 0, bottom: 40 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#cbd5e1" />
         <XAxis 
           dataKey={axisKeys.x} 
@@ -207,7 +239,14 @@ const DynamicChart = React.memo(({ type, data, keys, colors, axisKeys, yDomain, 
           height={70}
           padding={{ left: 20, right: 20 }} 
         />
-        <YAxis yAxisId="left" stroke="#64748b" fontSize={9} fontWeight="bold" width={45} domain={yDomain || [0, 'auto']} />
+        <YAxis 
+          yAxisId={primaryYAxisId} 
+          stroke="#64748b" 
+          fontSize={10} 
+          fontWeight="bold" 
+          width={45} 
+          domain={yDomain || [0, 'auto']} 
+        />
         {type === 'composed' && <YAxis yAxisId="right" orientation="right" stroke={colors[1]} fontSize={9} width={45} domain={[0, 100]} />}
         <Tooltip contentStyle={{ borderRadius: '12px', fontSize: '11px' }} />
         {type === 'composed' ? (
@@ -220,25 +259,26 @@ const DynamicChart = React.memo(({ type, data, keys, colors, axisKeys, yDomain, 
             </Line>
           </>
         ) : type === 'bar' ? (
-          <Bar dataKey={keys[0]} fill={colors[0]} radius={[4, 4, 0, 0]} {...animationProps}>
+          <Bar yAxisId={primaryYAxisId} dataKey={keys[0]} fill={colors[0]} radius={[4, 4, 0, 0]} {...animationProps}>
             {showLabels && <LabelList dataKey={keys[0]} position="top" style={{ fontSize: '10px', fontWeight: '900', fill: colors[0] }} />}
           </Bar>
         ) : type === 'area' ? (
-          <Area type="monotone" dataKey={keys[0]} stroke={colors[0]} fill={colors[0]} fillOpacity={0.2} strokeWidth={3} {...animationProps}>
+          <Area yAxisId={primaryYAxisId} type="monotone" dataKey={keys[0]} stroke={colors[0]} fill={colors[0]} fillOpacity={0.2} strokeWidth={3} {...animationProps}>
             {showLabels && <LabelList dataKey={keys[0]} position="top" offset={10} style={{ fontSize: '10px', fontWeight: '900', fill: colors[0] }} />}
           </Area>
         ) : (
-          <Line type={type === 'stepAfter' ? 'stepAfter' : 'monotone'} dataKey={keys[0]} stroke={colors[0]} strokeWidth={3} dot={{ r: 3 }} {...animationProps}>
+          <Line yAxisId={primaryYAxisId} type={type === 'stepAfter' ? 'stepAfter' : 'monotone'} dataKey={keys[0]} stroke={colors[0]} strokeWidth={3} dot={{ r: 3 }} {...animationProps}>
             {showLabels && <LabelList dataKey={keys[0]} position="top" offset={10} style={{ fontSize: '10px', fontWeight: '900', fill: colors[0] }} />}
           </Line>
         )}
-        {benchmark && <ReferenceLine yAxisId="left" y={benchmark} stroke="#ef4444" strokeDasharray="5 5" />}
+        {benchmark && <ReferenceLine yAxisId={primaryYAxisId} y={benchmark} stroke="#ef4444" strokeDasharray="5 5" />}
       </ChartComp>
     );
   };
 
+  // Removed overflow-hidden to allow axis labels to be fully visible even if margin is tight
   return (
-    <div className="w-full h-full" key={`${type}-${dataVersion}`}>
+    <div className="w-full h-full relative" style={{ minHeight: '300px' }} key={`${type}-${dataVersion}`}>
       <ResponsiveContainer width="100%" height="100%">{renderChart()}</ResponsiveContainer>
     </div>
   );
@@ -255,7 +295,6 @@ export const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   
-  // Initialize date strictly using India Standard Time
   const [monitorDate, setMonitorDate] = useState<string>(() => getShiftDateString(getISTNow()));
   const [effMode, setEffMode] = useState<EfficiencyMode>('avg');
 
@@ -320,8 +359,9 @@ export const App: React.FC = () => {
         matName: c[idx.mat] || "N/A",
         arrivalTime: c[idx.arrival] || "",
         endTime: c[idx.end] || "",
-        totalTime: parseFloat(c[idx.totalTime]) || 0,
-        weight: parseFloat(c[idx.weight]) || 0,
+        // Fix: Remove commas to ensure large numbers (e.g., 1,894) are parsed correctly
+        totalTime: parseNumberSafe(c[idx.totalTime]),
+        weight: parseNumberSafe(c[idx.weight]),
         mxStock: 0, whStock: 0
       })).filter(x => !!x.matName);
       setRawData(parsed);
@@ -342,7 +382,6 @@ export const App: React.FC = () => {
     const e = smartParseDate(filters.endDate);
     if (!s || !e) return [];
     
-    // Shift boundaries: From 07:00 on start date to 07:00 after end date
     const sB = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 7, 0);
     const eB = new Date(e.getFullYear(), e.getMonth(), e.getDate() + 1, 7, 0);
     
@@ -357,7 +396,6 @@ export const App: React.FC = () => {
     filteredData.forEach(r => {
       const d = smartParseDate(r.arrivalTime);
       if (d) {
-        // Here we group by "Shift Date" (IST logic)
         const k = getShiftDateString(d);
         if (!map[k]) map[k] = { date: k, tons: 0, counts: 0, time: 0 };
         map[k].tons += r.weight / 1000;
@@ -404,7 +442,6 @@ export const App: React.FC = () => {
     filteredData.forEach(r => {
       const d = smartParseDate(r.arrivalTime);
       if (d) {
-        // Extraction of hour naturally aligns if parsing treated input as IST
         hrs[d.getHours()].count++;
       }
     });
@@ -492,7 +529,6 @@ export const App: React.FC = () => {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-8 space-y-10">
-        {/* Dynamic Monitor */}
         <section className="bg-slate-900 rounded-[2.5rem] p-10 text-white shadow-2xl relative overflow-hidden">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8 mb-10 border-b border-slate-800 pb-8">
             <div className="space-y-2">
@@ -508,7 +544,7 @@ export const App: React.FC = () => {
             </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-h-[500px] overflow-y-auto pr-4 custom-scrollbar">
-            {todayMonitor.items.map((item, idx) => {
+            {todayMonitor.items.length > 0 ? todayMonitor.items.map((item, idx) => {
               const isAlert = item.rate < settings.warnThreshold;
               return (
                 <div key={idx} className={`bg-slate-800/50 p-6 rounded-3xl border ${isAlert ? 'border-rose-500/50 bg-rose-900/10' : 'border-slate-700/40'} hover:bg-slate-800 transition-all group`}>
@@ -526,11 +562,14 @@ export const App: React.FC = () => {
                   </div>
                 </div>
               );
-            })}
+            }) : (
+              <div className="md:col-span-2 py-10 text-center text-slate-500 font-black italic border-2 border-dashed border-slate-700 rounded-3xl">
+                No entry records for the selected date.
+              </div>
+            )}
           </div>
         </section>
 
-        {/* Filters */}
         <section className="bg-white p-8 rounded-[2rem] border shadow-sm grid grid-cols-1 md:grid-cols-4 gap-8 items-end">
           <div className="md:col-span-2 space-y-3">
             <label className="text-xs font-black text-slate-500 uppercase tracking-widest">{t.selectDate}</label>
@@ -551,7 +590,6 @@ export const App: React.FC = () => {
           </button>
         </section>
 
-        {/* Chart Grid - Unified Single Column */}
         <div className="grid grid-cols-1 gap-12">
           {[
             { id: 'chart-pareto', title: t.pareto, icon: <LayoutGrid className="text-indigo-600" />, type: settings.chartTypes.pareto, data: paretoData.items, keys: ['tons', 'percentage'], colors: ['#6366f1', '#ef4444'], axisX: 'name', footer: [
@@ -608,7 +646,7 @@ export const App: React.FC = () => {
                   </div>
                 </div>
               </div>
-              <div className="flex-1 min-h-[450px]">
+              <div className="flex-1 w-full" style={{ minHeight: '450px' }}>
                 <DynamicChart 
                   type={chart.type} 
                   data={chart.data} 
@@ -630,7 +668,6 @@ export const App: React.FC = () => {
         </div>
       </main>
 
-      {/* Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm pointer-events-auto">
           <div className="bg-white w-full max-w-lg rounded-3xl p-10 space-y-8 shadow-2xl relative">
